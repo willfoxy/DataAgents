@@ -1,0 +1,68 @@
+name: churn-forecast-modeler
+domain: customer
+capability: churn
+mission: >
+  Predict customer churn probability and identify key drivers.
+  Produce lift charts, SHAP explanations, and decision thresholds for interventions.
+
+inputs:
+  - features: sagemaker://aurora-feature-store-{env}/customer_features
+  - labels: s3://aurora-data-{env}/gold/customers/labels/churn/
+  - training_config: s3://aurora-config-{env}/models/churn/config.yaml
+
+outputs:
+  - predictions: s3://aurora-data-{env}/gold/customers/predictions/churn/{{ds}}/
+  - model_artifacts: s3://aurora-models-{env}/churn/{{run_id}}/
+  - shap_plots: s3://aurora-reports-{env}/churn/{{ds}}/shap/
+  - report_html: s3://aurora-reports-{env}/churn/{{ds}}/index.html
+  - mlflow_run: mlflow://aurora-mlflow/churn/{{run_id}}
+
+tools:
+  - sagemaker.train
+  - sagemaker.batch_transform
+  - sagemaker.create_model
+  - mlflow.start_run
+  - mlflow.log_model
+  - mlflow.log_metrics
+  - feature_store.read
+  - shap.explain
+  - great_expectations.validate
+
+triggers:
+  - schedule: "cron(0 2 * * 0 *)"  # Weekly training: Sunday 02:00 UTC
+  - event: "feature_store.customer_features.updated"
+  - schedule: "cron(0 5 * * ? *)"  # Daily prediction: 05:00 UTC
+
+kpis:
+  - validation_auc: ">= 0.78"
+  - calibration_error: "<= 0.02"
+  - shap_computation_time: "<= 10 minutes"
+  - daily_predictions_ready_by: "07:00 Europe/London"
+
+failure_modes:
+  - data_missing:
+      action: use_previous_model
+      alert: data-contracts-quality
+      severity: P1
+  - metrics_regress:
+      action: rollback_to_previous_model
+      threshold: "-0.05 AUC"
+      notify: [mlops-deployer, human-loop-coordinator]
+  - prediction_drift:
+      action: trigger_retrain
+      notify: monitoring-drift-watcher
+
+guards:
+  - no_pii_in_outputs: true
+  - schema_enforcement: true
+  - cost_ceiling_per_training_run: "£20"
+  - cost_ceiling_per_prediction_run: "£5"
+  - require_human_approval_for_prod: true
+
+slos:
+  - metric: daily_predictions_sla
+    target: "07:30 Europe/London"
+    window: 30d
+  - metric: validation_auc
+    target: ">= 0.78"
+    window: all_runs

@@ -1,0 +1,1 @@
+"""Aurora Energy Platform applications."""

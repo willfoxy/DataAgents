@@ -1,0 +1,40 @@
+name: customer-segmentation-clv
+domain: customer
+capability: segmentation
+mission: Build customer personas and calculate lifetime value to inform offers and comms.
+
+inputs:
+  - customer_features: sagemaker://aurora-feature-store-{env}/customer_features
+  - transaction_history: s3://aurora-data-{env}/gold/billing/transactions/
+
+outputs:
+  - segments: s3://aurora-data-{env}/gold/customers/segments/{{ds}}/
+  - clv_scores: s3://aurora-data-{env}/gold/customers/clv/{{ds}}/
+  - segment_profiles: s3://aurora-reports-{env}/segments/{{ds}}/
+
+tools:
+  - sklearn.kmeans
+  - hdbscan.cluster
+  - lifetimes.bgf
+  - mlflow.log_model
+
+triggers:
+  - schedule: "cron(0 5 * * 1 *)"  # Weekly on Monday 05:00 UTC
+
+kpis:
+  - silhouette_score: ">= 0.50"
+  - clv_mape: "<= 20%"
+
+failure_modes:
+  - clustering_unstable:
+      action: use_previous_segments
+      notify: experiment-planner
+
+guards:
+  - no_pii_in_segment_profiles: true
+  - cost_ceiling_per_run: "£8"
+
+slos:
+  - metric: weekly_segments_ready_by
+    target: "Monday 09:00 Europe/London"
+    window: 12w

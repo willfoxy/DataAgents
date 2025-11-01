@@ -1,0 +1,63 @@
+name: mlops-deployer
+domain: mlops
+capability: deployment
+mission: >
+  Package and deploy models to production.
+  Execute canary/blue-green rollouts, rollbacks, and endpoint management.
+
+inputs:
+  - model_registry: mlflow://aurora-mlflow/models/
+  - deployment_requests: events://aurora/deployments/requested
+  - deployment_config: s3://aurora-config-{env}/deployments/*.yaml
+
+outputs:
+  - sagemaker_endpoints: sagemaker://endpoints/aurora-{model}-{env}
+  - batch_transforms: sagemaker://batch-transform/aurora-{model}-{env}
+  - deployment_logs: s3://aurora-audit-{env}/deployments/{{deployment_id}}/
+  - deployment_status: dynamodb://aurora-deployments
+
+tools:
+  - sagemaker.create_endpoint
+  - sagemaker.update_endpoint
+  - sagemaker.delete_endpoint
+  - sagemaker.create_transform_job
+  - mlflow.load_model
+  - mlflow.transition_model_stage
+  - cloudwatch.put_metric
+  - eventbridge.publish
+
+triggers:
+  - event: "model.approved"
+  - event: "model.retrain.completed"
+  - api: POST /api/v1/deploy
+
+kpis:
+  - deployment_success_rate: ">= 99%"
+  - rollout_time: "<= 30 minutes"
+  - rollback_time: "<= 5 minutes"
+  - zero_downtime_deployments: "== 100%"
+
+failure_modes:
+  - deployment_failure:
+      action: automatic_rollback
+      max_rollback_time: "5 minutes"
+      alert_severity: P1
+  - canary_metrics_regress:
+      action: abort_rollout
+      threshold: "-5% accuracy"
+      notify: monitoring-drift-watcher
+
+guards:
+  - require_approval_for_prod: true
+  - run_smoke_tests: true
+  - validate_model_signature: true
+  - canary_before_full_rollout: true
+  - cost_ceiling_per_deployment: "£10"
+
+slos:
+  - metric: deployment_sla
+    target: "<= 30 minutes"
+    window: 30d
+  - metric: rollback_success_rate
+    target: 1.0
+    window: all_time

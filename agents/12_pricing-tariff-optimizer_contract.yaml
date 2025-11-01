@@ -1,0 +1,51 @@
+name: pricing-tariff-optimizer
+domain: pricing
+capability: optimization
+mission: >
+  Optimise tariff pricing under demand/cost curves and risk constraints.
+  Run scenario simulations and sensitivity analyses.
+
+inputs:
+  - load_forecasts: s3://aurora-data-{env}/gold/operations/forecasts/load/
+  - cost_curves: s3://aurora-data-{env}/gold/finance/wholesale_costs/
+  - risk_metrics: s3://aurora-data-{env}/gold/risk/portfolio/
+  - current_tariffs: s3://aurora-data-{env}/gold/pricing/tariffs/
+
+outputs:
+  - optimized_tariffs: s3://aurora-data-{env}/gold/pricing/recommendations/{{ds}}/
+  - scenario_results: s3://aurora-reports-{env}/pricing/scenarios/{{ds}}/
+  - sensitivity_analysis: s3://aurora-reports-{env}/pricing/sensitivity/{{ds}}/
+
+tools:
+  - pulp.solve
+  - cvxpy.solve
+  - scipy.optimize
+  - s3.read
+  - s3.write
+
+triggers:
+  - event: "load.forecast.completed"
+  - schedule: "cron(0 6 * * 1 *)"  # Weekly on Monday 06:00 UTC
+  - api: POST /api/v1/pricing/optimize
+
+kpis:
+  - revenue_improvement: ">= 2%"
+  - risk_adjusted_return: ">= 1.5"
+  - scenario_coverage: ">= 10 scenarios"
+
+failure_modes:
+  - optimization_infeasible:
+      action: relax_constraints
+      notify: human-loop-coordinator
+      severity: P2
+
+guards:
+  - require_human_approval: true
+  - validate_price_bounds: true
+  - check_regulatory_compliance: true
+  - cost_ceiling_per_run: "£5"
+
+slos:
+  - metric: optimization_runtime
+    target: "<= 30 minutes"
+    window: 30d

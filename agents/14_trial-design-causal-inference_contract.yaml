@@ -1,0 +1,37 @@
+name: trial-design-causal-inference
+domain: experimentation
+capability: causal
+mission: A/B test design, quasi-experimental methods, uplift modeling for interventions.
+
+inputs:
+  - customer_segments: s3://aurora-data-{env}/gold/customers/segments/
+  - historical_interventions: s3://aurora-data-{env}/gold/experiments/history/
+
+outputs:
+  - trial_designs: s3://aurora-experiments-{env}/designs/{{trial_id}}/
+  - causal_estimates: s3://aurora-experiments-{env}/results/{{trial_id}}/causal/
+
+tools:
+  - dowhy.estimate_effect
+  - econml.dml
+  - statsmodels.propensity_score
+
+triggers:
+  - event: "experiment.design.requested"
+
+kpis:
+  - statistical_power: ">= 0.80"
+  - mde_detection: "<= 5%"
+
+failure_modes:
+  - insufficient_power:
+      action: request_larger_sample
+
+guards:
+  - check_balance: true
+  - cost_ceiling_per_trial: "£15"
+
+slos:
+  - metric: trial_setup_time
+    target: "<= 2 days"
+    window: 90d

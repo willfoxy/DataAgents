@@ -1,0 +1,47 @@
+name: acquisition-forecast-modeler
+domain: customer
+capability: acquisition
+mission: >
+  Forecast weekly and monthly customer sign-ups by channel and region.
+  Support marketing budget allocation and capacity planning.
+
+inputs:
+  - features: sagemaker://aurora-feature-store-{env}/acquisition_features
+  - historical_signups: s3://aurora-data-{env}/gold/customers/acquisitions/
+  - marketing_spend: s3://aurora-data-{env}/gold/marketing/spend/
+
+outputs:
+  - forecasts: s3://aurora-data-{env}/gold/customers/forecasts/acquisition/{{ds}}/
+  - model_artifacts: s3://aurora-models-{env}/acquisition/{{run_id}}/
+  - report_html: s3://aurora-reports-{env}/acquisition/{{ds}}/index.html
+  - mlflow_run: mlflow://aurora-mlflow/acquisition/{{run_id}}
+
+tools:
+  - prophet.fit
+  - statsmodels.sarimax
+  - xgboost.train
+  - mlflow.log_model
+  - feature_store.read
+  - s3.write
+
+triggers:
+  - schedule: "cron(0 3 * * 1 *)"  # Weekly on Monday 03:00 UTC
+
+kpis:
+  - mape: "<= 15%"
+  - forecast_bias: "<= 5%"
+  - coverage_80_pct: ">= 0.75"
+
+failure_modes:
+  - data_missing:
+      action: use_naive_forecast
+      notify: data-contracts-quality
+
+guards:
+  - validate_forecast_range: true
+  - cost_ceiling_per_run: "£10"
+
+slos:
+  - metric: weekly_forecast_ready_by
+    target: "Monday 09:00 Europe/London"
+    window: 12w

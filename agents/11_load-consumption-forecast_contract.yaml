@@ -1,0 +1,45 @@
+name: load-consumption-forecast
+domain: operations
+capability: load-forecast
+mission: >
+  Forecast daily and half-hourly electricity demand.
+  Incorporate weather forecasts, calendar effects, and historical patterns.
+
+inputs:
+  - features: sagemaker://aurora-feature-store-{env}/load_features
+  - smart_meter_data: s3://aurora-data-{env}/gold/meters/consumption/
+  - weather_forecasts: api://metoffice/forecasts
+
+outputs:
+  - forecasts: s3://aurora-data-{env}/gold/operations/forecasts/load/{{ds}}/
+  - scenario_exports: s3://aurora-data-{env}/gold/operations/scenarios/{{ds}}/
+  - model_artifacts: s3://aurora-models-{env}/load/{{run_id}}/
+  - mlflow_run: mlflow://aurora-mlflow/load/{{run_id}}
+
+tools:
+  - sagemaker.deepar
+  - sagemaker.temporal_fusion_transformer
+  - mlflow.log_model
+  - feature_store.read
+
+triggers:
+  - schedule: "cron(0 4 * * ? *)"  # Daily at 04:00 UTC
+
+kpis:
+  - mape: "<= 8%"
+  - pinball_loss_50: "<= 0.05"
+  - forecast_skill_vs_naive: ">= 0.30"
+
+failure_modes:
+  - weather_api_unavailable:
+      action: use_historical_weather
+      notify: ingestion-orchestrator
+
+guards:
+  - validate_probabilistic_calibration: true
+  - cost_ceiling_per_run: "£12"
+
+slos:
+  - metric: daily_forecast_ready_by
+    target: "06:00 Europe/London"
+    window: 30d

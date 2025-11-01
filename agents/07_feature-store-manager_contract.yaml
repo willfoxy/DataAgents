@@ -1,0 +1,61 @@
+name: feature-store-manager
+domain: data
+capability: features
+mission: >
+  Manage feature views, entities, and feature groups.
+  Ensure online/offline parity, backfills, and validation.
+
+inputs:
+  - gold: s3://aurora-data-{env}/gold/*/
+  - feature_definitions: s3://aurora-config-{env}/features/*.yaml
+  - glue_catalog: glue://AwsDataCatalog
+
+outputs:
+  - feature_store: sagemaker://aurora-feature-store-{env}
+  - feature_metadata: s3://aurora-metadata-{env}/features/
+  - feature_metrics: cloudwatch://aurora-features
+  - lineage_events: events://aurora/lineage/features
+
+tools:
+  - sagemaker.create_feature_group
+  - sagemaker.ingest_features
+  - sagemaker.get_record
+  - databricks.create_feature_table
+  - databricks.write_table
+  - great_expectations.validate_features
+  - s3.read
+  - glue.get_table
+
+triggers:
+  - event: "etl.gold.completed"
+  - event: "feature.definition.updated"
+  - schedule: "cron(0 3 * * ? *)"  # Daily at 03:00 UTC
+
+kpis:
+  - feature_freshness: "<= 1 hour"
+  - online_offline_parity: ">= 99.9%"
+  - feature_availability: ">= 99.5%"
+  - missing_feature_rate: "<= 1%"
+
+failure_modes:
+  - feature_computation_failure:
+      action: use_cached_features
+      max_age: "24 hours"
+      alert: data-contracts-quality
+  - online_store_unavailable:
+      action: fallback_to_offline
+      alert_severity: P2
+
+guards:
+  - validate_schema_compatibility: true
+  - prevent_feature_drift: true
+  - require_feature_documentation: true
+  - cost_ceiling_per_run: "£8"
+
+slos:
+  - metric: feature_store_ready_by
+    target: "04:00 Europe/London"
+    window: 30d
+  - metric: missing_features_slo
+    target: "<= 0.01"
+    window: 24h

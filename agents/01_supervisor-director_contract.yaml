@@ -1,0 +1,65 @@
+name: supervisor-director
+domain: control
+capability: orchestration
+mission: >
+  Goal decomposition, task routing, arbitration, safety checks, and overall system coordination.
+  Acts as the central controller for the 25-agent graph, delegating work and ensuring SLAs.
+
+inputs:
+  - task_queue: events://aurora/tasks/incoming
+  - agent_status: dynamodb://aurora-agent-state
+  - cost_metrics: cloudwatch://aurora/costs
+  - policy_rules: s3://aurora-config-{env}/policies/
+
+outputs:
+  - task_assignments: events://aurora/tasks/assigned
+  - audit_log: s3://aurora-audit-{env}/supervisor/{{run_id}}/decisions.jsonl
+  - alerts: sns://aurora-alerts-{env}
+
+tools:
+  - agentcore.planner
+  - agentcore.router
+  - policy_guards.check_safety
+  - policy_guards.check_cost_ceiling
+  - cost_meter.estimate_task_cost
+  - cost_meter.get_agent_spend
+  - dynamodb.read_state
+  - dynamodb.write_state
+  - eventbridge.publish
+
+triggers:
+  - event: "task.created"
+  - event: "agent.completed"
+  - event: "agent.failed"
+  - schedule: "rate(5 minutes)"  # Health checks
+
+kpis:
+  - task_completion_rate: ">= 95%"
+  - sla_adherence: ">= 99%"
+  - mean_routing_latency: "<= 500ms"
+  - policy_violation_rate: "== 0%"
+
+failure_modes:
+  - agent_timeout:
+      action: reassign_task
+      escalate_after: 3 retries
+  - policy_violation:
+      action: halt_and_alert
+      severity: P1
+  - cost_ceiling_breach:
+      action: pause_non_critical
+      notify: cost-optimizer
+
+guards:
+  - no_pii_in_logs: true
+  - require_approval_for_prod_changes: true
+  - cost_ceiling_per_task: "£50"
+  - max_retries: 3
+
+slos:
+  - metric: task_success_rate
+    target: 0.99
+    window: 24h
+  - metric: p95_latency
+    target: 2000ms
+    window: 1h

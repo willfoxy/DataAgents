@@ -1,0 +1,57 @@
+name: compliance-privacy-auditor
+domain: governance
+capability: compliance
+mission: PII scans, k-anonymity checks, policy enforcement, DPIA stubs, audit trails.
+
+inputs:
+  - datasets: s3://aurora-data-{env}/*/*/
+  - policies: s3://aurora-config-{env}/policies/*.yaml
+  - audit_logs: s3://aurora-audit-{env}/*/*/
+
+outputs:
+  - pii_reports: s3://aurora-reports-{env}/compliance/pii/{{ds}}/
+  - policy_violations: dynamodb://aurora-policy-violations
+  - audit_dashboard: cloudwatch://aurora-compliance
+  - dpia_stubs: s3://aurora-compliance-{env}/dpia/{{assessment_id}}/
+
+tools:
+  - presidio.analyze
+  - sdv.metrics.k_anonymity
+  - policy_guards.check_policy
+  - s3.scan_bucket
+  - cloudwatch.put_metric
+  - dynamodb.write
+
+triggers:
+  - event: "data.ingested"
+  - event: "model.deployed"
+  - schedule: "cron(0 9 * * ? *)"  # Daily at 09:00 UTC
+
+kpis:
+  - pii_detection_recall: ">= 0.99"
+  - false_positive_rate: "<= 5%"
+  - policy_violation_detection_rate: "== 100%"
+  - audit_trail_completeness: ">= 99.9%"
+
+failure_modes:
+  - pii_detected_in_prod:
+      action: quarantine_data
+      severity: P0
+      notify: [supervisor-director, dpo]
+  - policy_violation:
+      action: halt_pipeline
+      severity: P1
+      escalate_immediately: true
+
+guards:
+  - block_prod_on_pii: true
+  - require_dpia_for_new_models: true
+  - immutable_audit_logs: true
+
+slos:
+  - metric: pii_scan_coverage
+    target: "== 1.0"
+    window: 7d
+  - metric: audit_trail_retention
+    target: "7 years"
+    window: all_time

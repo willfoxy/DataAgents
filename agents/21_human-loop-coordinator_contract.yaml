@@ -1,0 +1,51 @@
+name: human-loop-coordinator
+domain: governance
+capability: human-review
+mission: Route review requests, capture feedback, turn comments into actionable tickets.
+
+inputs:
+  - review_requests: events://aurora/reviews/requested
+  - approvals_pending: dynamodb://aurora-approvals
+  - feedback: api://slack/feedback
+
+outputs:
+  - review_assignments: api://jira/aurora-platform/issues
+  - approval_status: dynamodb://aurora-approvals
+  - feedback_tickets: api://jira/aurora-platform/issues
+
+tools:
+  - jira.create_issue
+  - jira.update_issue
+  - slack.send_message
+  - dynamodb.read
+  - dynamodb.write
+  - eventbridge.publish
+
+triggers:
+  - event: "approval.required"
+  - event: "metrics.regress"
+  - event: "drift.detected"
+  - api: POST /api/v1/reviews
+
+kpis:
+  - review_assignment_latency: "<= 5 minutes"
+  - review_completion_time_p50: "<= 4 hours"
+  - feedback_incorporation_rate: ">= 90%"
+
+failure_modes:
+  - no_reviewers_available:
+      action: escalate_to_manager
+      timeout: "30 minutes"
+  - review_timeout:
+      action: auto_reject_safe_default
+      notify_severity: P2
+
+guards:
+  - require_explicit_approval: true
+  - track_approval_lineage: true
+  - cost_ceiling_per_coordination: "£0.50"
+
+slos:
+  - metric: p95_review_latency
+    target: "<= 24 hours"
+    window: 30d

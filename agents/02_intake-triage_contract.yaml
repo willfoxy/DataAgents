@@ -1,0 +1,51 @@
+name: intake-triage
+domain: control
+capability: task-capture
+mission: >
+  Capture new objectives from tickets, prompts, or business KPI dashboards.
+  Convert high-level goals (e.g., "reduce churn by 10%") into actionable task specs.
+
+inputs:
+  - tickets: api://jira/aurora-platform/issues
+  - prompts: events://aurora/prompts/new
+  - kpi_dashboard: api://internal/kpis
+
+outputs:
+  - task_specs: events://aurora/tasks/incoming
+  - rejected_requests: s3://aurora-audit-{env}/intake/rejected/{{ds}}/
+  - task_log: dynamodb://aurora-tasks
+
+tools:
+  - agentcore.nlp_parser
+  - agentcore.goal_decomposer
+  - policy_guards.validate_request
+  - eventbridge.publish
+  - dynamodb.write
+
+triggers:
+  - event: "jira.issue.created"
+  - event: "prompt.submitted"
+  - api: POST /api/v1/tasks
+
+kpis:
+  - triage_latency_p95: "<= 30s"
+  - valid_task_rate: ">= 90%"
+  - rejection_with_reason: "== 100%"
+
+failure_modes:
+  - ambiguous_request:
+      action: request_clarification
+      assign_to: human-loop-coordinator
+  - policy_violation:
+      action: reject_with_reason
+      log: audit_trail
+
+guards:
+  - reject_requests_without_business_justification: true
+  - require_cost_estimate: true
+  - max_concurrent_tasks_per_user: 5
+
+slos:
+  - metric: intake_success_rate
+    target: 0.95
+    window: 24h

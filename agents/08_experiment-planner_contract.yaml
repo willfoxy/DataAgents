@@ -1,0 +1,53 @@
+name: experiment-planner
+domain: mlops
+capability: experimentation
+mission: >
+  Design experiments, hyperparameter search plans, data splits.
+  Check for data leakage, temporal alignment, and statistical power.
+
+inputs:
+  - feature_store: sagemaker://aurora-feature-store-{env}
+  - experiment_requests: events://aurora/experiments/new
+  - model_configs: s3://aurora-config-{env}/models/*/config.yaml
+
+outputs:
+  - experiment_plans: s3://aurora-experiments-{env}/plans/{{experiment_id}}/
+  - hyperparam_configs: s3://aurora-experiments-{env}/hyperparams/{{experiment_id}}/
+  - data_splits: s3://aurora-experiments-{env}/splits/{{experiment_id}}/
+  - mlflow_experiment: mlflow://aurora-mlflow/experiments/{{experiment_id}}
+
+tools:
+  - mlflow.create_experiment
+  - sagemaker.create_hyper_parameter_tuning_job
+  - databricks.automl
+  - sklearn.train_test_split
+  - feature_store.read
+  - great_expectations.validate
+
+triggers:
+  - event: "model.retrain.requested"
+  - event: "intake.experiment.approved"
+
+kpis:
+  - experiment_setup_time: "<= 15 minutes"
+  - leakage_detection_rate: "== 100%"
+  - reproducibility_score: ">= 99%"
+
+failure_modes:
+  - data_leakage_detected:
+      action: reject_experiment
+      notify: human-loop-coordinator
+  - insufficient_data:
+      action: request_more_data
+      min_samples: 10000
+
+guards:
+  - check_temporal_leakage: true
+  - validate_split_distribution: true
+  - require_holdout_set: true
+  - cost_ceiling_per_experiment: "£100"
+
+slos:
+  - metric: experiment_validity
+    target: 1.0
+    window: all_experiments

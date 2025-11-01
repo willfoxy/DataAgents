@@ -1,0 +1,54 @@
+name: data-cataloguer
+domain: data
+capability: catalogue
+mission: >
+  Discover and maintain data catalogue in AWS Glue.
+  Generate schema cards, track lineage, and ensure metadata is current.
+
+inputs:
+  - s3_buckets: s3://aurora-data-{env}/*/
+  - glue_catalog: glue://AwsDataCatalog
+  - lineage_events: events://aurora/lineage/*
+
+outputs:
+  - schema_cards: s3://aurora-metadata-{env}/schemas/{{table}}/card.yaml
+  - lineage_graph: s3://aurora-metadata-{env}/lineage/{{ds}}/graph.json
+  - catalog_updates: glue://AwsDataCatalog
+  - search_index: opensearch://aurora-catalog
+
+tools:
+  - glue.get_tables
+  - glue.update_table
+  - glue.create_table
+  - great_expectations.profile_dataset
+  - lake_formation.get_permissions
+  - s3.list_objects
+  - opensearch.index
+
+triggers:
+  - event: "s3.object.created"
+    filter: "*.parquet|*.csv|*.json"
+  - schedule: "cron(0 4 * * ? *)"  # Daily discovery at 04:00 UTC
+
+kpis:
+  - catalog_coverage: ">= 98%"
+  - schema_drift_detection_latency: "<= 1 hour"
+  - lineage_completeness: ">= 95%"
+
+failure_modes:
+  - schema_mismatch:
+      action: raise_data_quality_alert
+      notify: data-contracts-quality
+  - missing_lineage:
+      action: log_warning
+      retry_after: 1h
+
+guards:
+  - auto_pii_detection: true
+  - require_data_owner_tag: true
+  - redact_sensitive_fields_in_metadata: true
+
+slos:
+  - metric: metadata_freshness
+    target: "<= 24h"
+    window: 7d

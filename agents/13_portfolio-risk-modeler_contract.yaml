@@ -1,0 +1,43 @@
+name: portfolio-risk-modeler
+domain: risk
+capability: modeling
+mission: >
+  Model hedging exposure, calculate VaR-style risk metrics, run stress tests.
+  Support treasury and risk management decisions.
+
+inputs:
+  - load_forecasts: s3://aurora-data-{env}/gold/operations/forecasts/load/
+  - hedging_positions: s3://aurora-data-{env}/gold/finance/hedges/
+  - market_data: s3://aurora-external/market_prices/
+
+outputs:
+  - risk_metrics: s3://aurora-data-{env}/gold/risk/portfolio/{{ds}}/
+  - var_reports: s3://aurora-reports-{env}/risk/var/{{ds}}/
+  - stress_test_results: s3://aurora-reports-{env}/risk/stress/{{ds}}/
+
+tools:
+  - numpy.random
+  - scipy.stats
+  - mlflow.log_metrics
+
+triggers:
+  - schedule: "cron(0 8 * * ? *)"  # Daily at 08:00 UTC
+  - event: "market.data.updated"
+
+kpis:
+  - var_accuracy: ">= 0.95"
+  - stress_scenario_coverage: ">= 5"
+
+failure_modes:
+  - market_data_stale:
+      action: use_cached_data
+      max_age: "4 hours"
+
+guards:
+  - require_approval_for_large_exposures: true
+  - cost_ceiling_per_run: "£8"
+
+slos:
+  - metric: daily_risk_report_by
+    target: "09:00 Europe/London"
+    window: 30d

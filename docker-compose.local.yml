@@ -1,0 +1,74 @@
+version: '3.8'
+
+services:
+  # LocalStack for AWS services
+  localstack:
+    image: localstack/localstack:latest
+    ports:
+      - "4566:4566"
+      - "4571:4571"
+    environment:
+      - SERVICES=s3,dynamodb,sqs,sns,events,logs
+      - DEBUG=1
+      - DATA_DIR=/tmp/localstack/data
+      - AWS_DEFAULT_REGION=eu-west-2
+    volumes:
+      - "./tmp/localstack:/tmp/localstack"
+      - "/var/run/docker.sock:/var/run/docker.sock"
+
+  # MLflow Tracking Server
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:latest
+    ports:
+      - "5000:5000"
+    environment:
+      - MLFLOW_BACKEND_STORE_URI=sqlite:///mlflow/mlflow.db
+      - MLFLOW_DEFAULT_ARTIFACT_ROOT=/mlflow/artifacts
+    volumes:
+      - "./tmp/mlflow:/mlflow"
+    command: >
+      mlflow server
+      --backend-store-uri sqlite:///mlflow/mlflow.db
+      --default-artifact-root /mlflow/artifacts
+      --host 0.0.0.0
+      --port 5000
+
+  # PostgreSQL (for MLflow backend - optional)
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=aurora
+      - POSTGRES_PASSWORD=aurora
+      - POSTGRES_DB=mlflow
+    ports:
+      - "5432:5432"
+    volumes:
+      - "./tmp/postgres:/var/lib/postgresql/data"
+
+  # Jupyter for interactive development
+  jupyter:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    ports:
+      - "8888:8888"
+    environment:
+      - AWS_ENDPOINT_URL=http://localstack:4566
+      - AWS_DEFAULT_REGION=eu-west-2
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    volumes:
+      - ".:/workspace"
+    command: >
+      jupyter lab
+      --ip=0.0.0.0
+      --port=8888
+      --no-browser
+      --allow-root
+      --NotebookApp.token=''
+      --NotebookApp.password=''
+
+networks:
+  default:
+    name: aurora-platform-local

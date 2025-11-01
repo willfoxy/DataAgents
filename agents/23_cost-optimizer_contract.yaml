@@ -1,0 +1,55 @@
+name: cost-optimizer
+domain: operations
+capability: cost-management
+mission: Track per-agent and per-model spend, recommend right-sizing and schedule tweaks.
+
+inputs:
+  - cost_data: api://aws/cost-explorer
+  - resource_usage: cloudwatch://aurora/*/metrics
+  - budget_config: s3://aurora-config-{env}/budgets/*.yaml
+
+outputs:
+  - cost_reports: s3://aurora-reports-{env}/costs/{{ds}}/
+  - optimization_recommendations: s3://aurora-reports-{env}/costs/recommendations/{{ds}}/
+  - budget_alerts: sns://aurora-budget-alerts-{env}
+  - cost_dashboard: cloudwatch://aurora-costs
+
+tools:
+  - boto3.cost_explorer
+  - cloudwatch.get_metric_statistics
+  - s3.calculate_storage_costs
+  - sagemaker.describe_endpoint
+  - cost_meter.get_agent_spend
+
+triggers:
+  - schedule: "cron(0 10 * * ? *)"  # Daily at 10:00 UTC
+  - event: "budget.threshold.breach"
+
+kpis:
+  - cost_tracking_accuracy: ">= 98%"
+  - optimization_acceptance_rate: ">= 60%"
+  - cost_reduction_achieved: ">= 10%/quarter"
+
+failure_modes:
+  - budget_breach_80pct:
+      action: alert_warning
+      severity: P3
+  - budget_breach_90pct:
+      action: pause_non_critical_workloads
+      severity: P2
+  - budget_breach_100pct:
+      action: halt_all_discretionary_spend
+      severity: P1
+
+guards:
+  - daily_budget_ceiling: "£150"
+  - alert_on_anomalous_spend: true
+  - require_justification_for_large_jobs: true
+
+slos:
+  - metric: daily_spend
+    target: "<= £150"
+    window: 30d
+  - metric: cost_attribution_coverage
+    target: ">= 0.95"
+    window: 30d

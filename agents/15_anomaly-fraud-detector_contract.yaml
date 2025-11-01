@@ -1,0 +1,39 @@
+name: anomaly-fraud-detector
+domain: security
+capability: detection
+mission: Detect metering and billing anomalies, identify fraud patterns.
+
+inputs:
+  - meter_readings: s3://aurora-data-{env}/gold/meters/readings/
+  - billing_events: s3://aurora-data-{env}/gold/billing/events/
+
+outputs:
+  - anomaly_scores: s3://aurora-data-{env}/gold/security/anomalies/{{ds}}/
+  - fraud_alerts: sns://aurora-fraud-alerts-{env}
+
+tools:
+  - sklearn.isolation_forest
+  - tensorflow.autoencoder
+  - mlflow.log_model
+
+triggers:
+  - schedule: "cron(0 */6 * * ? *)"  # Every 6 hours
+
+kpis:
+  - precision: ">= 0.70"
+  - recall: ">= 0.85"
+  - false_positive_rate: "<= 0.05"
+
+failure_modes:
+  - high_false_positives:
+      action: retune_threshold
+      notify: human-loop-coordinator
+
+guards:
+  - require_human_review_before_action: true
+  - cost_ceiling_per_run: "£5"
+
+slos:
+  - metric: detection_latency
+    target: "<= 6 hours"
+    window: 30d

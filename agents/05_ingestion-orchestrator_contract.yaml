@@ -1,0 +1,56 @@
+name: ingestion-orchestrator
+domain: data
+capability: ingestion
+mission: >
+  Orchestrate batch and stream ingestion from smart meters, CRM, web events, tariff tables.
+  Handle incremental loads, deduplication, and partitioning.
+
+inputs:
+  - smart_meters: sftp://meters.auroraenergy.uk/exports/
+  - crm_api: api://salesforce/customers
+  - web_events: kinesis://aurora-web-events-{env}
+  - tariff_data: s3://aurora-external/tariffs/
+
+outputs:
+  - bronze_layer: s3://aurora-data-{env}/bronze/{{source}}/{{ds}}/
+  - ingestion_metrics: cloudwatch://aurora-ingestion
+  - lineage_events: events://aurora/lineage/ingested
+
+tools:
+  - glue.start_job
+  - databricks.run_job
+  - kinesis.get_records
+  - s3.put_object
+  - sftp.download
+  - api.fetch
+  - eventbridge.publish
+
+triggers:
+  - schedule: "cron(0 1 * * ? *)"  # Daily at 01:00 UTC
+  - event: "external.data.available"
+  - kinesis: stream aurora-web-events-{env}
+
+kpis:
+  - ingestion_success_rate: ">= 99.5%"
+  - data_freshness: "<= 2 hours"
+  - duplicate_rate: "<= 0.1%"
+
+failure_modes:
+  - source_unavailable:
+      action: retry_with_exponential_backoff
+      max_retries: 5
+      dead_letter: sqs://aurora-ingestion-dlq
+  - schema_evolution:
+      action: notify_data_cataloguer
+      continue: false
+
+guards:
+  - validate_schema_before_write: true
+  - partition_by_date: true
+  - compress_output: "snappy"
+  - cost_ceiling_per_run: "£10"
+
+slos:
+  - metric: daily_ingestion_complete_by
+    target: "02:00 Europe/London"
+    window: 30d

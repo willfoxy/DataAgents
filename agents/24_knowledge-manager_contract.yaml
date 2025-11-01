@@ -1,0 +1,47 @@
+name: knowledge-manager
+domain: operations
+capability: knowledge
+mission: Curate RAG index of decisions, runs, schema cards, playbooks for agent self-help.
+
+inputs:
+  - schema_cards: s3://aurora-metadata-{env}/schemas/*/card.yaml
+  - runbooks: s3://aurora-docs-{env}/runbooks/*.md
+  - audit_logs: s3://aurora-audit-{env}/*/*/
+  - mlflow_runs: mlflow://aurora-mlflow/*/runs
+
+outputs:
+  - search_index: opensearch://aurora-knowledge
+  - knowledge_base: bedrock://aurora-kb-{env}
+  - documentation: s3://aurora-docs-{env}/generated/
+
+tools:
+  - opensearch.index_document
+  - bedrock.create_knowledge_base
+  - langchain.vector_store
+  - s3.read
+  - mlflow.search_runs
+
+triggers:
+  - event: "document.created"
+  - event: "model.registered"
+  - schedule: "cron(0 11 * * ? *)"  # Daily at 11:00 UTC
+
+kpis:
+  - search_relevance: ">= 0.85"
+  - index_freshness: "<= 24 hours"
+  - documentation_coverage: ">= 95%"
+
+failure_modes:
+  - indexing_failure:
+      action: retry_exponential_backoff
+      max_retries: 3
+
+guards:
+  - no_pii_in_index: true
+  - version_control_docs: true
+  - cost_ceiling_per_run: "£3"
+
+slos:
+  - metric: search_latency_p95
+    target: "<= 500ms"
+    window: 30d

@@ -1,0 +1,64 @@
+name: monitoring-drift-watcher
+domain: mlops
+capability: monitoring
+mission: >
+  Detect data drift, model drift, and performance decay.
+  Alert on anomalies and trigger retraining when necessary.
+
+inputs:
+  - predictions: s3://aurora-data-{env}/gold/*/predictions/*/
+  - features: sagemaker://aurora-feature-store-{env}
+  - actuals: s3://aurora-data-{env}/gold/*/labels/*/
+  - model_registry: mlflow://aurora-mlflow/models/
+
+outputs:
+  - drift_reports: s3://aurora-reports-{env}/drift/{{ds}}/
+  - drift_metrics: cloudwatch://aurora-drift
+  - drift_alerts: sns://aurora-drift-alerts-{env}
+  - retrain_triggers: events://aurora/retrain/triggered
+
+tools:
+  - evidently.calculate_drift
+  - alibi_detect.drift_detector
+  - sklearn.metrics
+  - mlflow.get_run
+  - cloudwatch.put_metric
+  - sns.publish
+  - eventbridge.publish
+
+triggers:
+  - schedule: "cron(0 */6 * * ? *)"  # Every 6 hours
+  - event: "predictions.completed"
+
+kpis:
+  - drift_detection_latency: "<= 1 hour"
+  - false_positive_rate: "<= 5%"
+  - false_negative_rate: "<= 1%"
+  - alert_actionability: ">= 90%"
+
+failure_modes:
+  - data_drift_detected:
+      action: trigger_retrain
+      threshold: "PSI > 0.2"
+      notify: [supervisor-director, experiment-planner]
+  - performance_decay:
+      action: trigger_review
+      threshold: "-10% from baseline"
+      notify: human-loop-coordinator
+  - concept_drift:
+      action: emergency_retrain
+      threshold: "KS > 0.3"
+      severity: P1
+
+guards:
+  - require_baseline_metrics: true
+  - sliding_window_comparison: "30 days"
+  - statistical_significance_test: true
+
+slos:
+  - metric: drift_detection_recall
+    target: ">= 0.95"
+    window: 90d
+  - metric: time_to_detect_drift
+    target: "<= 6 hours"
+    window: 30d

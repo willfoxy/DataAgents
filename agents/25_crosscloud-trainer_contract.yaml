@@ -1,0 +1,54 @@
+name: crosscloud-trainer
+domain: mlops
+capability: training
+mission: Launch fine-tuning and training jobs on SageMaker, Azure ML, and Databricks.
+
+inputs:
+  - training_requests: events://aurora/training/requested
+  - datasets: s3://aurora-data-{env}/gold/*/features/
+  - training_configs: s3://aurora-config-{env}/training/*.yaml
+
+outputs:
+  - sagemaker_jobs: sagemaker://training-jobs/aurora-{{model}}-{{run_id}}
+  - azure_jobs: azure-ml://workspaces/aurora/jobs/{{run_id}}
+  - databricks_jobs: databricks://jobs/{{job_id}}/runs/{{run_id}}
+  - model_registry: mlflow://aurora-mlflow/models/{{model}}
+  - comparison_reports: s3://aurora-reports-{env}/training/comparison/{{ds}}/
+
+tools:
+  - sagemaker.create_training_job
+  - azure.ml.command
+  - databricks.jobs.submit
+  - mlflow.register_model
+  - mlflow.compare_runs
+
+triggers:
+  - event: "retrain.triggered"
+  - event: "experiment.approved"
+
+kpis:
+  - training_success_rate: ">= 95%"
+  - cross_cloud_parity: ">= 0.98"
+  - cost_per_model_comparison: "<= £50"
+
+failure_modes:
+  - training_job_failure:
+      action: retry_different_cloud
+      max_retries: 2
+  - resource_quota_exceeded:
+      action: queue_for_later
+      notify: cost-optimizer
+
+guards:
+  - log_all_hyperparams: true
+  - register_all_models: true
+  - compare_cost_quality_tradeoff: true
+  - cost_ceiling_per_training_job: "£100"
+
+slos:
+  - metric: training_completion_time
+    target: "<= 4 hours"
+    window: 30d
+  - metric: model_registration_success_rate
+    target: "== 1.0"
+    window: all_time

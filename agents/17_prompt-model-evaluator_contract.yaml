@@ -1,0 +1,40 @@
+name: prompt-model-evaluator
+domain: mlops
+capability: evaluation
+mission: LLM and agent evaluation harness for quality, latency, cost, safety.
+
+inputs:
+  - eval_sets: s3://aurora-config-{env}/eval_sets/*.jsonl
+  - agent_outputs: s3://aurora-experiments-{env}/agent_runs/{{run_id}}/
+
+outputs:
+  - eval_reports: s3://aurora-reports-{env}/eval/{{run_id}}/
+  - metrics: mlflow://aurora-mlflow/eval/{{run_id}}
+
+tools:
+  - langchain.evaluate
+  - ragas.metrics
+  - mlflow.log_metrics
+
+triggers:
+  - event: "agent.deployed"
+  - event: "prompt.changed"
+
+kpis:
+  - hallucination_rate: "<= 2%"
+  - answer_relevance: ">= 0.85"
+  - response_latency_p95: "<= 3s"
+
+failure_modes:
+  - eval_quality_regress:
+      action: rollback_agent_version
+      notify: mlops-deployer
+
+guards:
+  - red_team_test_suite: true
+  - cost_ceiling_per_eval: "£5"
+
+slos:
+  - metric: eval_coverage
+    target: ">= 0.95"
+    window: all_deploys

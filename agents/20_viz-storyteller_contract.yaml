@@ -1,0 +1,60 @@
+name: viz-storyteller
+domain: reporting
+capability: visualization
+mission: >
+  Auto-generate reports and storyboards.
+  Answer "What changed?" and "So what?" with actionable insights.
+
+inputs:
+  - predictions: s3://aurora-data-{env}/gold/*/predictions/*/
+  - model_metrics: mlflow://aurora-mlflow/*/metrics
+  - drift_reports: s3://aurora-reports-{env}/drift/{{ds}}/
+  - business_kpis: api://internal/kpis
+
+outputs:
+  - report_html: s3://aurora-reports-{env}/{{pipeline}}/{{ds}}/index.html
+  - report_pdf: s3://aurora-reports-{env}/{{pipeline}}/{{ds}}/report.pdf
+  - summary_markdown: s3://aurora-reports-{env}/{{pipeline}}/{{ds}}/summary.md
+  - slack_notification: api://slack/webhooks/reports
+  - teams_notification: api://teams/webhooks/reports
+
+tools:
+  - jinja2.render_template
+  - matplotlib.pyplot
+  - seaborn.plots
+  - plotly.express
+  - markdown.convert
+  - weasyprint.render_pdf
+  - httpx.post
+
+triggers:
+  - event: "predictions.completed"
+  - event: "drift.detected"
+  - schedule: "cron(0 7 * * ? *)"  # Daily at 07:00 UTC
+
+kpis:
+  - report_generation_time: "<= 5 minutes"
+  - report_delivery_sla: "07:30 Europe/London"
+  - insight_actionability_score: ">= 4.0/5.0"  # Human feedback
+
+failure_modes:
+  - rendering_failure:
+      action: fallback_to_simple_text
+      notify: supervisor-director
+  - data_incomplete:
+      action: generate_partial_report
+      flag: "incomplete_data"
+
+guards:
+  - no_pii_in_reports: true
+  - redact_sensitive_metrics: true
+  - watermark_with_timestamp: true
+  - cost_ceiling_per_report: "£2"
+
+slos:
+  - metric: daily_report_sla
+    target: "07:30 Europe/London"
+    window: 30d
+  - metric: report_accuracy
+    target: ">= 0.98"
+    window: 90d

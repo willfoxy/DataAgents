@@ -1,0 +1,59 @@
+name: data-contracts-quality
+domain: data
+capability: quality
+mission: >
+  Define and enforce data contracts. Run Great Expectations test suites.
+  Alert on SLA breaches and data quality issues.
+
+inputs:
+  - contracts: s3://aurora-config-{env}/contracts/*.yaml
+  - data_tables: s3://aurora-data-{env}/{layer}/*
+  - glue_catalog: glue://AwsDataCatalog
+
+outputs:
+  - ge_results: s3://aurora-quality-{env}/results/{{ds}}/
+  - dq_alerts: sns://aurora-dq-alerts-{env}
+  - dq_dashboard: cloudwatch://aurora-dq-dashboard
+  - contract_violations: dynamodb://aurora-dq-violations
+
+tools:
+  - great_expectations.run_checkpoint
+  - great_expectations.validate_dataset
+  - great_expectations.build_suite
+  - s3.read
+  - glue.get_table
+  - cloudwatch.put_metric
+  - sns.publish
+
+triggers:
+  - event: "etl.completed"
+  - event: "data.ingested"
+  - schedule: "cron(0 */4 * * ? *)"  # Every 4 hours
+
+kpis:
+  - contract_compliance_rate: ">= 99%"
+  - false_positive_rate: "<= 1%"
+  - alert_latency: "<= 5 minutes"
+  - missing_features_rate: "<= 1%"
+
+failure_modes:
+  - contract_breach:
+      action: halt_downstream_pipeline
+      severity: P1
+      notify: [data-contracts-quality, supervisor-director]
+  - missing_data:
+      action: use_fallback_if_available
+      escalate_after: 2h
+
+guards:
+  - block_downstream_on_critical_failures: true
+  - require_data_owner_ack_for_contract_changes: true
+  - log_all_validation_runs: true
+
+slos:
+  - metric: data_quality_score
+    target: ">= 0.99"
+    window: 24h
+  - metric: sla_met_by_0730_uk
+    target: 1.0
+    window: 30d
