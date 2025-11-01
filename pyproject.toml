@@ -24,6 +24,7 @@ dependencies = [
     "langgraph>=0.2.0",
     "langchain>=0.3.0",
     "langchain-aws>=0.2.0",
+    "langchain-anthropic>=0.1.0",  # For LLM-powered planning
 
     # AWS
     "boto3>=1.34.0",
@@ -44,6 +45,7 @@ dependencies = [
     "mlflow>=2.10.0",
     "sagemaker>=2.210.0",
     "great-expectations>=0.18.0",
+    "evidently>=0.4.0",  # Drift detection
 
     # Delta/Iceberg
     "delta-spark>=3.1.0",
@@ -212,6 +214,8 @@ module = [
     "delta.*",
     "pyiceberg.*",
     "langgraph.*",
+    "evidently.*",
+    "langchain_anthropic.*",
 ]
 ignore_missing_imports = true
 
