@@ -7,6 +7,8 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from libs.common.types import GraphState, RunStatus
 from libs.common.logging import get_logger
 from apps.supervisor.supervisor_agent import SupervisorAgent
+from apps.supervisor.agent_registry import get_agent_registry
+from libs.resilience.self_healing import SelfHealingAgent, RecoveryStrategy
 
 logger = get_logger(__name__)
 
@@ -25,6 +27,8 @@ class AgentGraph:
 
     def __init__(self) -> None:
         self.supervisor = SupervisorAgent()
+        self.agent_registry = get_agent_registry()
+        self.self_healer = SelfHealingAgent()
         self.graph = self._build_graph()
 
     def _build_graph(self) -> StateGraph:
@@ -94,7 +98,7 @@ class AgentGraph:
         self,
         state: GraphState,
     ) -> GraphState:
-        """Execute the routed agent."""
+        """Execute the routed agent with error handling and retries."""
         next_agent = state.context.get("next_agent", "unknown")
 
         logger.info(
@@ -103,11 +107,84 @@ class AgentGraph:
             agent=next_agent,
         )
 
-        # In production, this would dynamically dispatch to the actual agent
-        # For now, simulate execution
-        outputs = await self._simulate_agent_execution(next_agent, state)
+        try:
+            # Get agent from registry
+            agent = await self.agent_registry.get_agent(next_agent)
 
-        state.outputs[next_agent] = outputs
+            # Execute agent
+            outputs = await agent.execute(state)
+
+            # Check for errors
+            if outputs.get("status") == "failed":
+                logger.warning(
+                    f"Agent {next_agent} failed",
+                    error=outputs.get("error"),
+                    task_id=state.task_id,
+                )
+
+                # Attempt self-healing
+                recovery = await self.self_healer.handle_failure(
+                    agent_name=next_agent,
+                    error=Exception(outputs.get("error", "Unknown error")),
+                    context=state,
+                )
+
+                # Apply recovery strategy
+                if recovery.strategy == RecoveryStrategy.RETRY:
+                    logger.info(f"Retrying agent: {next_agent}")
+                    state.retry_count += 1
+                    if state.retry_count < state.max_retries:
+                        outputs = await agent.execute(state)
+                    else:
+                        outputs["status"] = "failed"
+                        outputs["reason"] = "Max retries exceeded"
+
+                elif recovery.strategy == RecoveryStrategy.SKIP:
+                    logger.info(f"Skipping agent: {next_agent}")
+                    outputs["status"] = "skipped"
+
+                elif recovery.strategy == RecoveryStrategy.FALLBACK:
+                    logger.info(f"Using fallback for: {next_agent}")
+                    outputs["status"] = "success"
+                    outputs["fallback"] = True
+
+            # Store outputs
+            state.outputs[next_agent] = outputs
+
+            # Update cost tracking
+            agent_cost = outputs.get("cost_gbp", 0.0)
+            state.cost_so_far_gbp += agent_cost
+
+            # Update status
+            if outputs.get("status") == "success":
+                state.status = RunStatus.IN_PROGRESS
+            elif outputs.get("status") == "failed":
+                state.status = RunStatus.FAILED
+                state.errors.append(f"{next_agent}: {outputs.get('error', 'Unknown error')}")
+
+        except Exception as e:
+            logger.error(
+                f"Agent execution failed: {next_agent}",
+                error=str(e),
+                task_id=state.task_id,
+                exc_info=True,
+            )
+
+            # Attempt recovery
+            recovery = await self.self_healer.handle_failure(
+                agent_name=next_agent,
+                error=e,
+                context=state,
+            )
+
+            state.outputs[next_agent] = {
+                "status": "failed",
+                "error": str(e),
+                "agent": next_agent,
+                "recovery_attempted": recovery.strategy.value,
+            }
+            state.status = RunStatus.FAILED
+            state.errors.append(f"{next_agent}: {str(e)}")
 
         return state
 
@@ -149,47 +226,17 @@ class AgentGraph:
 
         return "execute"
 
-    async def _simulate_agent_execution(
-        self,
-        agent_name: str,
-        state: GraphState,
-    ) -> dict:
-        """
-        Simulate agent execution.
+    def get_agent_metadata(self, agent_name: str) -> dict:
+        """Get metadata for an agent."""
+        return self.agent_registry.get_metadata(agent_name)
 
-        In production, this would:
-        1. Load agent implementation
-        2. Execute agent with state
-        3. Return outputs
-        """
-        logger.info(f"Simulating {agent_name} execution")
+    def list_all_agents(self) -> list[str]:
+        """List all available agents."""
+        return self.agent_registry.list_agents()
 
-        # Placeholder outputs
-        outputs = {
-            "status": "success",
-            "timestamp": state.updated_at.isoformat(),
-            "agent": agent_name,
-        }
-
-        # Simulate specific agent outputs
-        if agent_name == "churn-forecast-modeler":
-            outputs.update(
-                {
-                    "predictions_uri": f"s3://aurora-data-dev/gold/customers/predictions/churn/20250101/",
-                    "model_uri": f"s3://aurora-models-dev/churn/run-123/model.tar.gz",
-                    "metrics": {"auc": 0.82, "calibration_error": 0.015},
-                }
-            )
-        elif agent_name == "data-contracts-quality":
-            outputs.update(
-                {
-                    "validation_passed": True,
-                    "checks_run": 15,
-                    "checks_passed": 15,
-                }
-            )
-
-        return outputs
+    def get_agents_by_domain(self, domain: str) -> list[str]:
+        """Get agents by domain."""
+        return self.agent_registry.get_agents_by_domain(domain)
 
     async def run(
         self,
