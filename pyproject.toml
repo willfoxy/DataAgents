@@ -71,6 +71,12 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "click>=8.1.0",
 
+    # Web API & Collaboration
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    "websockets>=12.0",
+    "python-multipart>=0.0.9",
+
     # Cost tracking
     "boto3-cost-explorer>=0.1.0",
 
